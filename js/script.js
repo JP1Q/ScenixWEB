@@ -1,4 +1,5 @@
-// Fetching sensor data
+let searchedSen = 0; // Global variable to store the count of filtered sensors
+
 async function fetchSensorData() {
     try {
         const response = await fetch('http://127.0.0.1:5000/senzory');
@@ -13,7 +14,18 @@ async function fetchSensorData() {
     }
 }
 
-// Fetching total number of sensors
+async function fetchHistoricalDelay(sensor_id){
+    const response = await fetch(`http://localhost:5000/historical/${sensor_id}/delay`)
+    return await response.json()
+}
+
+// /historical/{sensor_id}/frequency
+
+async function fetchFrequency(){
+    const response = await fetch(`http://localhost:5000/frequency`)
+    return await response.json()    
+}
+
 async function fetchSensorCount() {
     try {
         const response = await fetch('http://127.0.0.1:5000/pocetsenzoru');
@@ -28,7 +40,6 @@ async function fetchSensorCount() {
     }
 }
 
-// Fetching number of records in the last minute
 async function fetchRecordsInLastMinute() {
     try {
         const response = await fetch('http://127.0.0.1:5000/pocetzaminutu');
@@ -43,25 +54,40 @@ async function fetchRecordsInLastMinute() {
     }
 }
 
-// Function to generate sensor cards using fetched data
+function saveScrollPosition() {
+    localStorage.setItem('scrollPosition', window.scrollY);
+}
+
+function restoreScrollPosition() {
+    const scrollPosition = localStorage.getItem('scrollPosition');
+    if (scrollPosition) {
+        window.scrollTo(0, parseFloat(scrollPosition));
+    }
+}
+
 async function generateSensorCards() {
     const sensors = await fetchSensorData();
     const sensorCount = await fetchSensorCount();
     const recordsInLastMinute = await fetchRecordsInLastMinute();
+    
 
     const sensorsContainer = document.getElementById('sensors').querySelector('.row');
-    sensorsContainer.innerHTML = ''; // Clear existing cards
-
-    // Display summary of total counts
     const summaryContainer = document.getElementById('summary');
+
     summaryContainer.innerHTML = `
         <h5>Celkový počet senzorů: ${sensorCount}</h5>
+        <h5>Počet vyhledaných senzorů: ${searchedSen}</h5>
         <h5>Počet záznamů za poslední minutu: ${recordsInLastMinute}</h5>
     `;
 
+    const query = document.getElementById('sensor-search').value.trim().toLowerCase();
+
+    sensorsContainer.innerHTML = ''; // Clear existing cards
     let delay = 0;
+
     sensors.forEach((sensor) => {
-        setTimeout(() => {
+        
+        if (!query || sensor.typ.toLowerCase().includes(query)) {
             const card = document.createElement('div');
             card.className = 'card p-3 rounded-3 shadow';
             card.style.borderColor = sensor.stav;
@@ -82,15 +108,34 @@ async function generateSensorCards() {
                 showModal(sensor);
             });
             sensorsContainer.appendChild(card);
-        }, delay);
-        delay += 20; // Adjust this value to control the staggering delay
+            searchedSen++;
+        }
     });
+
+    // Ensure the summary is updated correctly with the count of displayed sensors
+    summaryContainer.querySelector('h5:nth-child(2)').textContent = `Počet vyhledaných senzorů: ${searchedSen}`;
+
+    // Restore the scroll position after updating the sensor cards
+    restoreScrollPosition();
 }
 
-// Refresh sensor cards every 1 minute
-setInterval(generateSensorCards, 60000); // 60000 milliseconds = 1 minute
+// Save the scroll position before refreshing sensor cards
+window.addEventListener('beforeunload', saveScrollPosition);
 
-// Function to update Plotly theme
+// Refresh sensor cards every 1 minute without scrolling to the top or playing the animation
+setInterval(() => {
+    saveScrollPosition();
+    generateSensorCards();
+}, 60000);
+
+window.addEventListener('DOMContentLoaded', async (event) => {
+    const currentTheme = 'dark';
+    updatePlotlyTheme(currentTheme);
+    updateNavbarLogo(currentTheme);
+    await generateSensorCards(); // Generate initial sensor cards
+    restoreScrollPosition(); // Restore scroll position after generating initial cards
+});
+
 function updatePlotlyTheme(theme) {
     const layout = theme === 'light' 
         ? { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff', font: { color: '#000000' } } 
@@ -103,21 +148,11 @@ function updatePlotlyTheme(theme) {
     }
 }
 
-// Set initial Plotly theme and logo based on the current stylesheet
-window.addEventListener('DOMContentLoaded', async (event) => {
-    const currentTheme = 'dark';
-    updatePlotlyTheme(currentTheme);
-    updateNavbarLogo(currentTheme);
-    await generateSensorCards(); // Generate initial sensor cards
-});
-
-// Update navbar logo based on the current theme
 function updateNavbarLogo(theme) {
     const logo = document.getElementById('navbar-logo');
     logo.src = theme === 'light' ? 'images/Scenix.png' : 'images/ScenixDarkTheme.png';
 }
 
-// Theme toggle button
 const themeToggleBtn = document.getElementById('theme-toggle');
 const themeStyle = document.getElementById('theme-style');
 
@@ -130,7 +165,6 @@ themeToggleBtn.addEventListener('click', () => {
     updateNavbarLogo(newTheme);
 });
 
-// Placeholder data for Plotly graph on homepage
 var graph1Data = [
     {
         x: ['2021-01-01', '2021-01-02', '2021-01-03'],
@@ -140,21 +174,34 @@ var graph1Data = [
 ];
 Plotly.newPlot('graph1', graph1Data, { title: 'Počet funkčních sensorů historicky' });
 
-// Modal handling
 const modal = document.getElementById('modal');
 const span = document.getElementsByClassName('close')[0];
-
-function showModal(sensor) {
+async function showModal(sensor) {
     modal.style.display = 'flex';
-    const sensorGraphData = [
-        {
-            x: ['2021-01-01', '2021-01-02', '2021-01-03'],
-            y: sensor.delayData,
-            type: 'scatter'
-        }
-    ];
-    Plotly.newPlot('sensorGraph', sensorGraphData, { title: `Historický delay pro sensor ${sensor.nazev}` });
+    console.log(sensor.id)
+    
+    try {
+        const data = await fetchHistoricalDelay(sensor.id);
+        console.log(data);
+        
+        const sensorGraphData = [{
+            x: data.data.map(record => record.timestamp),
+            y: data.data.map(record => record.delay),
+            type: 'scatter',
+            mode: 'lines+markers',
+            name: `Historický delay pro sensor ${sensor.nazev}`
+        }];
+
+        Plotly.newPlot('sensorGraph', sensorGraphData, {
+            title: `Historický delay pro sensor ${sensor.nazev}`,
+            xaxis: { title: 'Čas' },
+            yaxis: { title: 'Zpoždění (sekundy)' }
+        });
+    } catch (error) {
+        console.error('Error fetching historical delay:', error);
+    }
 }
+
 
 span.onclick = function() {
     modal.style.display = 'none';
@@ -166,7 +213,6 @@ window.onclick = function(event) {
     }
 }
 
-// Navbar links
 const homepageLink = document.getElementById('nav-homepage');
 const sensorsLink = document.getElementById('nav-sensors');
 
@@ -184,20 +230,28 @@ sensorsLink.addEventListener('click', function() {
     homepageLink.classList.remove('active');
 });
 
-// Function to filter sensor cards based on search query by "typ"
+const sensorSearchInput = document.getElementById('sensor-search');
+sensorSearchInput.addEventListener('input', function() {
+    const query = this.value.trim().toLowerCase();
+    searchedSen = 0; // Reset the count before filtering
+    filterSensorCardsByTyp(query);
+});
+
 function filterSensorCardsByTyp(query) {
+    searchedSen = 0; // Reset the count before filtering
     const sensorsContainer = document.getElementById('sensors').querySelector('.row');
     const cards = sensorsContainer.querySelectorAll('.card');
 
     cards.forEach(card => {
         const sensorTyp = card.querySelector('.card-text').textContent.toLowerCase(); // Assuming typ is displayed in the card text
-        card.style.display = sensorTyp.includes(query.toLowerCase()) ? 'block' : 'none';
+        if (query === '' || sensorTyp.includes(query.toLowerCase())) {
+            card.style.display = 'block';
+            searchedSen++; // Increment the count for each filtered sensor
+        } else {
+            card.style.display = 'none';
+        }
     });
-}
 
-// Event listener for input in search bar
-const sensorSearchInput = document.getElementById('sensor-search');
-sensorSearchInput.addEventListener('input', function() {
-    const query = this.value.trim();
-    filterSensorCardsByTyp(query);
-});
+    const summaryContainer = document.getElementById('summary');
+    summaryContainer.querySelector('h5:nth-child(2)').textContent = `Počet vyhledaných senzorů: ${searchedSen}`;
+}
